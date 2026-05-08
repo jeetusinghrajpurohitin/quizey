@@ -22,6 +22,7 @@ const SKILL_PASS_THRESHOLD = 85;
 const SKILL_QUESTION_COUNT = 40;
 const SKILL_DURATION_SECONDS = 40 * 60;
 const CLASS_OPTIONS = ['DA', 'CYBERSECURITY', 'CSC', 'AIML'];
+const DEMO_EMAILS = new Set(['admin@quizpulse.ai', 'student@quizpulse.ai', 'jax@demo.ai']);
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 const AI_PROVIDER = process.env.AI_PROVIDER || 'local';
 const openai = AI_PROVIDER === 'openai' && OpenAI && process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
@@ -130,27 +131,43 @@ function sanitizeQuizForAttempt(q) {
   }; 
 }
 function createSeedData() {
-  const adminId = uid('user'); const studentId = uid('user');
   return {
-    users: [
-      { id: adminId, name: 'Ava Admin', email: 'admin@quizpulse.ai', passwordHash: hashPassword('Admin@123'), role: 'admin', skills: [], progress: [], createdAt: nowIso() },
-      { id: studentId, name: 'Mia Student', email: 'student@quizpulse.ai', passwordHash: hashPassword('Student@123'), role: 'student', userClass: 'CYBERSECURITY', skills: [], progress: [], createdAt: nowIso() },
-      { id: uid('user'), name: 'Jax Coder', email: 'jax@demo.ai', passwordHash: hashPassword('123'), role: 'student', userClass: 'CSC', skills: ['javascript', 'react'], progress: [], createdAt: nowIso() },
-    ],
-    quizzes: [{
-      id: uid('quiz'), topic: 'javascript', title: 'JavaScript Essentials Sprint', description: 'Basic DOM concepts.', difficulty: 'Beginner', estimatedMinutes: 8, passScore: PASS_THRESHOLD, createdBy: adminId, status: 'active',
-      questions: [{ id: uid('q'), prompt: 'What does === check in JS?', options: ['Value', 'Type', 'Value and Type', 'Ref'], answerIndex: 2, explanation: 'Strict equality.' }]
-    }],
+    users: [],
+    quizzes: [],
     attempts: [],
     partialAttempts: {}
   };
+}
+function removePredefinedDemoData(store) {
+  let changed = false;
+  const users = Array.isArray(store.users) ? store.users : [];
+  const demoUserIds = new Set(users.filter(u => DEMO_EMAILS.has(String(u.email || '').toLowerCase())).map(u => u.id));
+  if (demoUserIds.size) {
+    store.users = users.filter(u => !demoUserIds.has(u.id));
+    store.quizzes = (store.quizzes || []).filter(q => !demoUserIds.has(q.createdBy) && q.title !== 'JavaScript Essentials Sprint');
+    store.attempts = (store.attempts || []).filter(a => !demoUserIds.has(a.userId) && store.quizzes.some(q => q.id === a.quizId));
+    if (store.partialAttempts) {
+      demoUserIds.forEach(userId => delete store.partialAttempts[userId]);
+    }
+    changed = true;
+  }
+  if (!Array.isArray(store.users)) { store.users = []; changed = true; }
+  if (!Array.isArray(store.quizzes)) { store.quizzes = []; changed = true; }
+  if (!Array.isArray(store.attempts)) { store.attempts = []; changed = true; }
+  if (!store.partialAttempts || typeof store.partialAttempts !== 'object') { store.partialAttempts = {}; changed = true; }
+  return changed;
 }
 function ensureStore() {
   const dir = path.dirname(STORE_PATH);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   if (!fs.existsSync(STORE_PATH)) fs.writeFileSync(STORE_PATH, JSON.stringify(createSeedData(), null, 2));
 }
-function readStore() { ensureStore(); return JSON.parse(fs.readFileSync(STORE_PATH, 'utf8')); }
+function readStore() {
+  ensureStore();
+  const store = JSON.parse(fs.readFileSync(STORE_PATH, 'utf8'));
+  if (removePredefinedDemoData(store)) writeStore(store);
+  return store;
+}
 function writeStore(s) { fs.writeFileSync(STORE_PATH, JSON.stringify(s, null, 2)); }
 function buildStudentProgress(u, s) {
   const atts = s.attempts.filter(a => a.userId === u.id).sort((a, b) => new Date(a.takenAt) - new Date(b.takenAt));
